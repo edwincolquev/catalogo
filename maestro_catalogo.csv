@@ -1,0 +1,3 @@
+part_id;brand_id;model_id;engine_type_id;displacement;year_from;year_to;applications;;;;;;;;
+;;;;;;;part_id;brand_id;model_id;engine_type_id;;displacement;year_from;year_to;
+;;;;;;;parts.supplier_code;vehicle_brand.name;vehicle_model.name;engine_type.code;engine_type.description;applications.displacement;applications.year_from;applications.year_to;part_oem_code.oem_code
