@@ -1,5 +1,7 @@
 # Propuesta de maestro CSV
 
+> Documento de diseño inicial. El formato operativo de dos encabezados y 17 columnas se describe en [ANALISIS_MAESTRO.md](ANALISIS_MAESTRO.md); la sección de aplicaciones en una celda se conserva solo como alternativa histórica.
+
 ## 1. Llave del repuesto
 
 La llave funcional sera `supplier_code` (codigo del proveedor). Debe ser obligatorio, unico y no depender de que exista todavia un codigo SAP.
@@ -8,9 +10,9 @@ La llave funcional sera `supplier_code` (codigo del proveedor). Debe ser obligat
 
 La plantilla operativa es [maestro_catalogo.csv](maestro_catalogo.csv).
 
-## 2. Una fila por repuesto
+## 2. Varias filas por repuesto
 
-El archivo maestro usa una fila por `supplier_code` y estas columnas:
+El maestro real usa dos filas de encabezado: la primera agrupa tablas y la segunda contiene los nombres de campos. Puede contener varias filas por `supplier_code`; cada fila aporta campos o aplicaciones adicionales. Las celdas vacías no borran valores existentes.
 
 | Columna | Obligatoria | Destino | Regla |
 | --- | --- | --- | --- |
@@ -52,9 +54,9 @@ Reglas:
 2. Validar que exista `supplier_code` y que no este vacio.
 3. Agrupar filas por `supplier_code`. Se aceptan varias filas del mismo repuesto para facilitar cargas provenientes de distintas fuentes.
 4. Consolidar los campos multivalor mediante union sin duplicados.
-5. Si las filas repetidas traen valores diferentes para `sap_code`, `description`, `measure` o `brand_name`, marcar el grupo como conflicto y no confirmarlo automaticamente.
+5. Si las filas repetidas traen valores diferentes para `sap_code`, `description`, `measure` o `brand_name`, prevalece el último valor no vacío, siguiendo el orden del archivo.
 6. Buscar el repuesto por `supplier_code`, ignorando mayusculas y espacios externos.
-7. Crear el repuesto si no existe; actualizar solo los campos informados si ya existe.
+7. Crear el repuesto si no existe; reemplazar solo los campos informados si ya existe.
 8. Mantener `sap_code` opcional. Si llega vacio, no borrar un SAP existente.
 9. Crear marcas de vehiculo, modelos y motores una sola vez usando sus claves naturales.
 10. Crear OEM y referencias una sola vez por repuesto; los repetidos se ignoran.
@@ -80,14 +82,15 @@ La implementacion deberia incluir, en una migracion controlada:
 - Cambiar el alta manual para exigir `supplier_code`, no SAP.
 - Agregar el parser de `oem_codes`, `reference_codes` y `applications`.
 - Usar actualizacion parcial: celdas vacias no deben borrar informacion existente.
-- Agregar un reporte de conflictos para filas con el mismo `supplier_code` y valores contradictorios.
+- Mostrar los valores existentes y los nuevos antes de confirmar. Si proveedor y SAP apuntan a repuestos distintos, cancelar la confirmación completa.
 
-## 6. Criterios de aprobacion
+## 6. Reglas confirmadas
 
-Antes de programar, confirmar:
+Confirmado por el usuario:
 
-- Que `supplier_code` identifica univocamente al repuesto en todo el negocio.
-- Que una fila del maestro representa un unico repuesto.
+- `supplier_code` identifica unívocamente al repuesto en todo el catálogo.
+- Un valor nuevo no vacío reemplaza el valor ya guardado.
+- Varias filas del maestro pueden representar un mismo repuesto.
 - Que `|` y `||` quedan reservados para separar datos multivalor.
 - Que una celda vacia significa "no actualizar", no borrar.
 - Que el SAP puede quedar vacio.

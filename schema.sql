@@ -2,9 +2,9 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS parts (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sap_code TEXT NOT NULL,
+    sap_code TEXT,
     supplier_code TEXT,
-    description TEXT NOT NULL,
+    description TEXT,
     measure TEXT,
     brand_name TEXT,
     long_description TEXT,
@@ -13,7 +13,8 @@ CREATE TABLE IF NOT EXISTS parts (
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS parts_sap_code_unique ON parts (upper(trim(sap_code)));
+CREATE UNIQUE INDEX IF NOT EXISTS parts_sap_code_unique ON parts (upper(trim(sap_code))) WHERE sap_code IS NOT NULL AND trim(sap_code) <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS parts_supplier_code_unique ON parts (upper(trim(supplier_code))) WHERE supplier_code IS NOT NULL AND trim(supplier_code) <> '';
 CREATE INDEX IF NOT EXISTS parts_description_index ON parts (description);
 
 CREATE TABLE IF NOT EXISTS part_oem_codes (
@@ -63,11 +64,15 @@ CREATE TABLE IF NOT EXISTS part_applications (
     displacement REAL CHECK (displacement IS NULL OR displacement > 0),
     year_from INTEGER CHECK (year_from IS NULL OR year_from BETWEEN 1886 AND 2200),
     year_to INTEGER CHECK (year_to IS NULL OR year_to BETWEEN 1886 AND 2200),
+    application_text TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (year_from IS NULL OR year_to IS NULL OR year_from <= year_to),
-    UNIQUE (part_id, brand_id, model_id, engine_type_id, displacement, year_from, year_to)
+    CHECK (year_from IS NULL OR year_to IS NULL OR year_from <= year_to)
 );
 CREATE INDEX IF NOT EXISTS part_applications_vehicle_lookup ON part_applications (brand_id, model_id, year_from, year_to);
+CREATE UNIQUE INDEX IF NOT EXISTS part_applications_unique ON part_applications (
+    part_id, brand_id, model_id, coalesce(engine_type_id, 0), coalesce(displacement, 0),
+    coalesce(year_from, 0), coalesce(year_to, 0), upper(trim(coalesce(application_text, '')))
+);
 
 CREATE TABLE IF NOT EXISTS import_batches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

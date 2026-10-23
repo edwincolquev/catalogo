@@ -35,18 +35,34 @@ where sap_code = 'CPL-7277';
 
 ## Aplicación local
 
-La primera versión incluye SQLite, carga de CSV/Excel a staging, validación de filas, confirmación de registros válidos, gestión básica de repuestos y generación de descripción larga.
+La versión local usa SQLite y Streamlit para importar, revisar y administrar el catálogo.
 
 1. Crear un entorno virtual: `python -m venv .venv`
 2. Activarlo en PowerShell: `.venv\\Scripts\\Activate.ps1`
 3. Instalar dependencias: `pip install -r requirements.txt`
 4. Ejecutar: `streamlit run app.py`
 
-Los archivos de datos se guardan en `data/catalogo.sqlite3`. Para comenzar, use la plantilla [plantilla_importacion.csv](plantilla_importacion.csv) y complete una fila por repuesto. Las columnas reconocidas incluyen `Codigo SAP`, `Descripcion`, `Medida`, `OEM`, `Referencia`, `Codigo proveedor` y `Marca`. `Codigo SAP` y `Descripcion` son obligatorios; varios valores de `OEM` o `Referencia` pueden separarse con coma, punto y coma o `|`.
+Los archivos de datos se guardan en `data/catalogo.sqlite3`. También se acepta la plantilla sencilla [plantilla_importacion.csv](plantilla_importacion.csv), con una fila por repuesto. Varios OEM o referencias pueden separarse con coma, punto y coma o `|`.
+
+## Maestro con dos encabezados
+
+La aplicación reconoce [maestro_catalogo.csv](maestro_catalogo.csv): la primera fila agrupa tablas y la segunda contiene los nombres de campos. Las filas repetidas de `parts.supplier_code` consolidan un mismo repuesto. `supplier_code` es único en el catálogo; SAP y descripción pueden completarse después. Una celda vacía conserva el valor existente y una celda no vacía lo reemplaza. OEM, referencias y aplicaciones existentes no se duplican.
+
+Las aplicaciones incompletas o con texto compuesto en el campo motor aparecen como avisos y se omiten; los datos válidos del repuesto sí se cargan. La pantalla de Streamlit permite crear, editar y eliminar repuestos, OEM, referencias y aplicaciones, y muestra la descripción generada y la revisión previa de cada carga. Consulte [ANALISIS_MAESTRO.md](ANALISIS_MAESTRO.md) para el mapeo y los casos del archivo de ejemplo.
+
+Al abrir una base anterior, se crea `data/catalogo.pre_supplier_migration.sqlite3` antes de adaptar la tabla `parts`. Para trabajar con otra base, defina `CATALOGO_DB_PATH` antes de iniciar Streamlit.
+
+Estas reglas están implementadas en SQLite. La migración Supabase/PostgreSQL incluida en el repositorio todavía corresponde al modelo inicial y deberá alinearse antes de sincronizar ambos entornos.
+
+## Formato de aplicaciones y descripciones
+
+El resumen de aplicaciones sigue la función VBA `ObtenerDescripcion`: recorre las aplicaciones en el orden de carga, elimina duplicados completos y omite marca, modelo y cilindrada cuando coinciden con la aplicación anterior. Motor y periodo se muestran en cada aplicación; los años usan dos dígitos (`DEL 88 AL 00`, `DESDE 01`, `HASTA 05`). Todos los textos se convierten a mayúsculas y las aplicaciones se separan con `; `.
+
+El campo opcional `part_applications.application_text` conserva el texto libre de la columna H (`Aplicación`) del VBA. Puede editarse en Streamlit o importarse con el encabezado `applications.application_text`. Al adaptar una base anterior se crea `data/catalogo.pre_application_text_migration.sqlite3`; las aplicaciones completamente duplicadas se consolidan conservando la primera fila. La base original no se modifica hasta que se ejecuta la aplicación o se llama a `initialize_database` sobre ella.
 
 ## Siguiente fase
 
 - Ajustar la politica RLS a roles de negocio en lugar de permisos amplios para todo usuario autenticado.
-- Definir el formato real de los Excel y crear `import_batches` y tablas de staging.
+- Revisar y corregir las aplicaciones ambiguas del maestro antes de completarlas en la base.
 - Crear funciones RPC o una API para Power Apps.
 - Agregar datos maestros y pruebas automatizadas de importacion y descripcion larga.
