@@ -13,14 +13,14 @@ def test_import_and_description_generation(tmp_path):
         {"Codigo SAP": "SAP-001", "Descripcion": "Filtro aceite", "Medida": "10 mm", "OEM": "OEM-1, OEM-2"},
         {"Codigo SAP": "SAP-002", "Descripcion": ""},
     ])
-    batch_id = stage_dataframe(dataframe, "test.xlsx", db_path=database_path)
-    assert confirm_batch(batch_id, db_path=database_path) == (2, 0)
+    lote_id = stage_dataframe(dataframe, "test.xlsx", db_path=database_path)
+    assert confirm_batch(lote_id, db_path=database_path) == (2, 0)
     with get_connection(database_path) as connection:
-        part = connection.execute("SELECT id FROM parts WHERE sap_code = 'SAP-001'").fetchone()
-        description = refresh_long_description(connection, part["id"])
-        assert description == "Filtro aceite\n10 mm\n(OEM: OEM-1, OEM-2)"
-        assert connection.execute("SELECT COUNT(*) FROM import_staging_rows WHERE status = 'error'").fetchone()[0] == 0
-        assert connection.execute("SELECT description FROM parts WHERE sap_code = 'SAP-002'").fetchone()[0] is None
+        part = connection.execute("SELECT id FROM repuestos WHERE codigo_sap = 'SAP-001'").fetchone()
+        descripcion = refresh_long_description(connection, part["id"])
+        assert descripcion == "Filtro aceite\n10 mm\n(OEM: OEM-1, OEM-2)"
+        assert connection.execute("SELECT COUNT(*) FROM filas_importacion WHERE estado = 'error'").fetchone()[0] == 0
+        assert connection.execute("SELECT descripcion FROM repuestos WHERE codigo_sap = 'SAP-002'").fetchone()[0] is None
 
 
 def test_import_reads_semicolon_csv(tmp_path):
@@ -50,29 +50,29 @@ def test_master_is_idempotent_and_updates_only_informed_fields(tmp_path):
         writer.writerow(["GA-0300", "CTL-GA-0300", "GUARDAPOLVO", "", "", "CHEVROLET", "", "D-60", "", "1964", "1971"])
     master = read_source(source_path)
     assert master.attrs["first_data_row"] == 3
-    batch_id = stage_dataframe(master, "maestro.csv", db_path=database_path)
+    lote_id = stage_dataframe(master, "maestro.csv", db_path=database_path)
     with get_connection(database_path) as connection:
         assert connection.execute(
-            "SELECT COUNT(*) FROM import_staging_rows WHERE batch_id = ? AND errors LIKE '%Aviso:%'",
-            (batch_id,),
+            "SELECT COUNT(*) FROM filas_importacion WHERE lote_id = ? AND errores LIKE '%Aviso:%'",
+            (lote_id,),
         ).fetchone()[0] == 1
-    assert confirm_batch(batch_id, db_path=database_path) == (2, 0)
+    assert confirm_batch(lote_id, db_path=database_path) == (2, 0)
     with get_connection(database_path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM part_applications").fetchone()[0] == 2
-        assert connection.execute("SELECT COUNT(*) FROM parts").fetchone()[0] == 2
-    batch_id = stage_dataframe(master, "maestro.csv", db_path=database_path)
-    assert confirm_batch(batch_id, db_path=database_path) == (0, 0)
+        assert connection.execute("SELECT COUNT(*) FROM aplicaciones_repuestos").fetchone()[0] == 2
+        assert connection.execute("SELECT COUNT(*) FROM repuestos").fetchone()[0] == 2
+    lote_id = stage_dataframe(master, "maestro.csv", db_path=database_path)
+    assert confirm_batch(lote_id, db_path=database_path) == (0, 0)
     update = pd.DataFrame([{
         "Codigo proveedor": "7277", "Descripcion": "MANGUERA ACTUALIZADA", "OEM": "OEM-1|OEM-NUEVO",
     }])
-    batch_id = stage_dataframe(update, "update.csv", db_path=database_path)
-    assert confirm_batch(batch_id, db_path=database_path) == (0, 1)
+    lote_id = stage_dataframe(update, "update.csv", db_path=database_path)
+    assert confirm_batch(lote_id, db_path=database_path) == (0, 1)
     with get_connection(database_path) as connection:
-        part = connection.execute("SELECT * FROM parts WHERE supplier_code = '7277'").fetchone()
-        assert part["description"] == "MANGUERA ACTUALIZADA"
-        assert part["sap_code"] == "CPL-7277"
+        part = connection.execute("SELECT * FROM repuestos WHERE codigo_proveedor = '7277'").fetchone()
+        assert part["descripcion"] == "MANGUERA ACTUALIZADA"
+        assert part["codigo_sap"] == "CPL-7277"
         assert connection.execute(
-            "SELECT COUNT(*) FROM part_oem_codes WHERE part_id = ?", (part["id"],)
+            "SELECT COUNT(*) FROM codigos_oem WHERE repuesto_id = ?", (part["id"],)
         ).fetchone()[0] == 2
 
 
@@ -85,17 +85,49 @@ def test_oem_only_continuation_does_not_create_application(tmp_path):
     ]).fillna("")
     rows.attrs["master_format"] = True
     rows.attrs["first_data_row"] = 3
-    batch_id = stage_dataframe(rows, "maestro.csv", db_path=database_path)
-    assert confirm_batch(batch_id, db_path=database_path) == (1, 0)
+    lote_id = stage_dataframe(rows, "maestro.csv", db_path=database_path)
+    assert confirm_batch(lote_id, db_path=database_path) == (1, 0)
     with get_connection(database_path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM part_applications").fetchone()[0] == 1
-        assert connection.execute("SELECT COUNT(*) FROM part_oem_codes").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM aplicaciones_repuestos").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM codigos_oem").fetchone()[0] == 1
+
+
+def test_master_v2_links_oem_and_references_by_supplier_code(tmp_path):
+    database_path = tmp_path / "catalogo.sqlite3"
+    initialize_database(database_path)
+    source_path = tmp_path / "maestro_catalogo v2.csv"
+    with source_path.open("w", encoding="utf-8", newline="") as source:
+        writer = csv.writer(source, delimiter=";")
+        writer.writerow(["PARTS", "", "PART_OEM_CODE", "PART_CROSS_REFERENCES", ""])
+        writer.writerow(["parts.id", "parts.supplier_code", "part_oem_code.oem_code",
+                         "part_cross_references.reference_type", "part_cross_references.reference_code"])
+        writer.writerow(["", "PROV-1", "OEM-1", "CRUCE", "REF-1"])
+        writer.writerow(["", "PROV-1", "oem-1", "cruce", "ref-1"])
+        writer.writerow(["", "", "OEM-2", "CRUCE", "REF-2"])
+
+    master = read_source(source_path)
+    assert "part_oem_code.part_id" not in master.columns
+    assert "part_cross_references.part_id" not in master.columns
+    lote_id = stage_dataframe(master, source_path.name, db_path=database_path)
+    assert confirm_batch(lote_id, db_path=database_path) == (1, 0)
+    lote_id = stage_dataframe(master, source_path.name, db_path=database_path)
+    assert confirm_batch(lote_id, db_path=database_path) == (0, 0)
+
+    with get_connection(database_path) as connection:
+        part = connection.execute("SELECT id FROM repuestos WHERE codigo_proveedor = 'PROV-1'").fetchone()
+        assert connection.execute("SELECT COUNT(*) FROM repuestos").fetchone()[0] == 1
+        assert connection.execute(
+            "SELECT COUNT(*) FROM codigos_oem WHERE repuesto_id = ?", (part["id"],)
+        ).fetchone()[0] == 2
+        assert connection.execute(
+            "SELECT COUNT(*) FROM referencias_cruzadas WHERE repuesto_id = ?", (part["id"],)
+        ).fetchone()[0] == 2
 
 
 def test_vba_application_compaction():
-    def application(brand, model, displacement, engine, start, end, text=""):
-        return dict(brand_name=brand, model_name=model, displacement=displacement,
-                    engine_code=engine, year_from=start, year_to=end, application_text=text)
+    def application(brand, model, cilindrada, engine, start, end, text=""):
+        return dict(nombre_marca=brand, nombre_modelo=model, cilindrada=cilindrada,
+                    codigo_motor=engine, anio_desde=start, anio_hasta=end, texto_aplicacion=text)
 
     rows = [
         application("Honda", "Civic", 1.6, "D16", 1988, 2000, "Sedan"),
@@ -127,13 +159,13 @@ def test_application_text_is_imported_and_part_of_duplicate_key(tmp_path):
          "applications.year_from": "1990", "applications.year_to": "1995",
          "applications.application_text": "4X4"},
     ]).fillna("")
-    batch_id = stage_dataframe(rows, "applications.csv", db_path=database_path)
-    assert confirm_batch(batch_id, db_path=database_path) == (1, 0)
-    batch_id = stage_dataframe(rows, "applications.csv", db_path=database_path)
-    assert confirm_batch(batch_id, db_path=database_path) == (0, 0)
+    lote_id = stage_dataframe(rows, "applications.csv", db_path=database_path)
+    assert confirm_batch(lote_id, db_path=database_path) == (1, 0)
+    lote_id = stage_dataframe(rows, "applications.csv", db_path=database_path)
+    assert confirm_batch(lote_id, db_path=database_path) == (0, 0)
     with get_connection(database_path) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM part_applications").fetchone()[0] == 2
-        part_id = connection.execute("SELECT id FROM parts WHERE supplier_code = 'P-1'").fetchone()[0]
-        assert generate_application_summary(connection, part_id) == (
+        assert connection.execute("SELECT COUNT(*) FROM aplicaciones_repuestos").fetchone()[0] == 2
+        repuesto_id = connection.execute("SELECT id FROM repuestos WHERE codigo_proveedor = 'P-1'").fetchone()[0]
+        assert generate_application_summary(connection, repuesto_id) == (
             "TOYOTA: HILUX 2L DEL 90 AL 95 PICKUP; 2L DEL 90 AL 95 4X4"
         )

@@ -5,9 +5,9 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 
-def _period(year_from: Any, year_to: Any) -> str:
-    first = str(year_from).strip()[-2:].zfill(2) if year_from not in (None, "") else ""
-    last = str(year_to).strip()[-2:].zfill(2) if year_to not in (None, "") else ""
+def _period(anio_desde: Any, anio_hasta: Any) -> str:
+    first = str(anio_desde).strip()[-2:].zfill(2) if anio_desde not in (None, "") else ""
+    last = str(anio_hasta).strip()[-2:].zfill(2) if anio_hasta not in (None, "") else ""
     if first and last:
         return f"DEL {first} AL {last}"
     if first:
@@ -29,16 +29,16 @@ def format_application_rows(rows: Iterable[Mapping[str, Any]]) -> str:
     previous_brand = previous_model = previous_displacement = ""
     details: list[str] = []
     for row in rows:
-        brand = str(row["brand_name"] or "").strip().rstrip(" :").upper()
-        model = str(row["model_name"] or "").strip().upper()
-        displacement = _displacement(row["displacement"])
-        engine = str(row["engine_code"] or "").strip().upper()
-        year_from = row["year_from"]
-        year_to = row["year_to"]
-        application = str(row["application_text"] or "").strip().upper()
-        key = (brand, model, displacement, engine,
-               str(year_from) if year_from is not None else "",
-               str(year_to) if year_to is not None else "", application)
+        brand = str(row["nombre_marca"] or "").strip().rstrip(" :").upper()
+        model = str(row["nombre_modelo"] or "").strip().upper()
+        cilindrada = _displacement(row["cilindrada"])
+        engine = str(row["codigo_motor"] or "").strip().upper()
+        anio_desde = row["anio_desde"]
+        anio_hasta = row["anio_hasta"]
+        application = str(row["texto_aplicacion"] or "").strip().upper()
+        key = (brand, model, cilindrada, engine,
+               str(anio_desde) if anio_desde is not None else "",
+               str(anio_hasta) if anio_hasta is not None else "", application)
         if key in seen:
             continue
         seen.add(key)
@@ -48,63 +48,63 @@ def format_application_rows(rows: Iterable[Mapping[str, Any]]) -> str:
             pieces.append(f"{brand}:")
         if model and (model != previous_model or brand != previous_brand):
             pieces.append(model)
-        if displacement and (
-            displacement != previous_displacement or model != previous_model or brand != previous_brand
+        if cilindrada and (
+            cilindrada != previous_displacement or model != previous_model or brand != previous_brand
         ):
-            pieces.append(displacement)
+            pieces.append(cilindrada)
         if engine:
             pieces.append(engine)
-        period = _period(year_from, year_to)
+        period = _period(anio_desde, anio_hasta)
         if period:
             pieces.append(period)
         if application:
             pieces.append(application)
         if pieces:
             details.append(" ".join(pieces))
-        previous_brand, previous_model, previous_displacement = brand, model, displacement
+        previous_brand, previous_model, previous_displacement = brand, model, cilindrada
     return "; ".join(details)
 
 
-def generate_application_summary(connection: sqlite3.Connection, part_id: int) -> str:
+def generate_application_summary(connection: sqlite3.Connection, repuesto_id: int) -> str:
     """Texto de aplicaciones siguiendo la columna Resumen!N del VBA."""
     applications = connection.execute(
-        """SELECT vb.name AS brand_name, vm.name AS model_name, et.code AS engine_code,
-                  pa.displacement, pa.year_from, pa.year_to, pa.application_text
-           FROM part_applications pa
-           JOIN vehicle_brands vb ON vb.id = pa.brand_id
-           JOIN vehicle_models vm ON vm.id = pa.model_id
-           LEFT JOIN engine_types et ON et.id = pa.engine_type_id
-           WHERE pa.part_id = ? ORDER BY pa.id""",
-        (part_id,),
+        """SELECT vb.nombre AS nombre_marca, vm.nombre AS nombre_modelo, et.codigo AS codigo_motor,
+                  pa.cilindrada, pa.anio_desde, pa.anio_hasta, pa.texto_aplicacion
+           FROM aplicaciones_repuestos pa
+           JOIN marcas_vehiculos vb ON vb.id = pa.marca_id
+           JOIN modelos_vehiculos vm ON vm.id = pa.modelo_id
+           LEFT JOIN tipos_motor et ON et.id = pa.tipo_motor_id
+           WHERE pa.repuesto_id = ? ORDER BY pa.id""",
+        (repuesto_id,),
     ).fetchall()
     return format_application_rows(applications)
 
 
-def generate_long_description(connection: sqlite3.Connection, part_id: int) -> str:
+def generate_long_description(connection: sqlite3.Connection, repuesto_id: int) -> str:
     part = connection.execute(
-        "SELECT description, measure FROM parts WHERE id = ?", (part_id,)
+        "SELECT descripcion, medida FROM repuestos WHERE id = ?", (repuesto_id,)
     ).fetchone()
     if part is None:
-        raise ValueError(f"No existe el repuesto {part_id}")
-    values = [part["description"].strip()] if part["description"] and part["description"].strip() else []
-    if part["measure"] and part["measure"].strip():
-        values.append(part["measure"].strip())
+        raise ValueError(f"No existe el repuesto {repuesto_id}")
+    values = [part["descripcion"].strip()] if part["descripcion"] and part["descripcion"].strip() else []
+    if part["medida"] and part["medida"].strip():
+        values.append(part["medida"].strip())
     oems = connection.execute(
-        "SELECT oem_code FROM part_oem_codes WHERE part_id = ? ORDER BY upper(oem_code)",
-        (part_id,),
+        "SELECT codigo_oem FROM codigos_oem WHERE repuesto_id = ? ORDER BY upper(codigo_oem)",
+        (repuesto_id,),
     ).fetchall()
     if oems:
-        values.append("(OEM: " + ", ".join(row["oem_code"].strip() for row in oems) + ")")
-    applications = generate_application_summary(connection, part_id)
+        values.append("(OEM: " + ", ".join(row["codigo_oem"].strip() for row in oems) + ")")
+    applications = generate_application_summary(connection, repuesto_id)
     if applications:
         values.append(applications)
     return "\n".join(values)
 
 
-def refresh_long_description(connection: sqlite3.Connection, part_id: int) -> str:
-    description = generate_long_description(connection, part_id)
+def refresh_long_description(connection: sqlite3.Connection, repuesto_id: int) -> str:
+    descripcion = generate_long_description(connection, repuesto_id)
     connection.execute(
-        "UPDATE parts SET long_description = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
-        (description, part_id),
+        "UPDATE repuestos SET descripcion_larga = ?, fecha_actualizacion = CURRENT_TIMESTAMP WHERE id = ?",
+        (descripcion, repuesto_id),
     )
-    return description
+    return descripcion

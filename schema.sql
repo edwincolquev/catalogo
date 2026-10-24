@@ -1,98 +1,107 @@
 PRAGMA foreign_keys = ON;
 
-CREATE TABLE IF NOT EXISTS parts (
+CREATE TABLE IF NOT EXISTS repuestos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    sap_code TEXT,
-    supplier_code TEXT,
-    description TEXT,
-    measure TEXT,
-    brand_name TEXT,
-    long_description TEXT,
-    is_active INTEGER NOT NULL DEFAULT 1 CHECK (is_active IN (0, 1)),
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    codigo_sap TEXT,
+    codigo_proveedor TEXT,
+    descripcion TEXT,
+    medida TEXT,
+    unidad_id INTEGER REFERENCES unidades_medida(id) ON DELETE RESTRICT,
+    marca_id INTEGER REFERENCES marcas_repuestos(id) ON DELETE RESTRICT,
+    categoria_id INTEGER REFERENCES categorias_repuestos(id) ON DELETE RESTRICT,
+    estado_gestion TEXT NOT NULL DEFAULT 'propuesto'
+        CHECK (estado_gestion IN ('propuesto', 'en_cotizacion', 'pendiente_aprobacion', 'aprobado', 'rechazado', 'pedido', 'en_sap'))
+        CHECK (estado_gestion <> 'en_sap' OR trim(coalesce(codigo_sap, '')) <> ''),
+    minimo_compra REAL CHECK (minimo_compra IS NULL OR minimo_compra > 0),
+    precio_compra REAL CHECK (precio_compra IS NULL OR precio_compra >= 0),
+    precio_venta REAL CHECK (precio_venta IS NULL OR precio_venta >= 0),
+    cantidad_compra REAL CHECK (cantidad_compra IS NULL OR cantidad_compra >= 0),
+    descripcion_larga TEXT,
+    activo INTEGER NOT NULL DEFAULT 1 CHECK (activo IN (0, 1)),
+    fecha_creacion TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    fecha_actualizacion TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS parts_sap_code_unique ON parts (upper(trim(sap_code))) WHERE sap_code IS NOT NULL AND trim(sap_code) <> '';
-CREATE UNIQUE INDEX IF NOT EXISTS parts_supplier_code_unique ON parts (upper(trim(supplier_code))) WHERE supplier_code IS NOT NULL AND trim(supplier_code) <> '';
-CREATE INDEX IF NOT EXISTS parts_description_index ON parts (description);
+CREATE UNIQUE INDEX IF NOT EXISTS repuestos_codigo_sap_unico ON repuestos (upper(trim(codigo_sap))) WHERE codigo_sap IS NOT NULL AND trim(codigo_sap) <> '';
+CREATE UNIQUE INDEX IF NOT EXISTS repuestos_codigo_proveedor_unico ON repuestos (upper(trim(codigo_proveedor))) WHERE codigo_proveedor IS NOT NULL AND trim(codigo_proveedor) <> '';
+CREATE INDEX IF NOT EXISTS repuestos_descripcion_indice ON repuestos (descripcion);
 
-CREATE TABLE IF NOT EXISTS part_oem_codes (
+CREATE TABLE IF NOT EXISTS codigos_oem (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    part_id INTEGER NOT NULL REFERENCES parts(id) ON DELETE CASCADE,
-    oem_code TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (part_id, oem_code COLLATE NOCASE)
+    repuesto_id INTEGER NOT NULL REFERENCES repuestos(id) ON DELETE CASCADE,
+    codigo_oem TEXT NOT NULL,
+    fecha_creacion TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (repuesto_id, codigo_oem COLLATE NOCASE)
 );
 
-CREATE TABLE IF NOT EXISTS part_cross_references (
+CREATE TABLE IF NOT EXISTS referencias_cruzadas (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    part_id INTEGER NOT NULL REFERENCES parts(id) ON DELETE CASCADE,
-    reference_type TEXT NOT NULL,
-    reference_code TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (part_id, reference_type COLLATE NOCASE, reference_code COLLATE NOCASE)
+    repuesto_id INTEGER NOT NULL REFERENCES repuestos(id) ON DELETE CASCADE,
+    tipo_referencia TEXT NOT NULL,
+    codigo_referencia TEXT NOT NULL,
+    fecha_creacion TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (repuesto_id, tipo_referencia COLLATE NOCASE, codigo_referencia COLLATE NOCASE)
 );
 
-CREATE TABLE IF NOT EXISTS vehicle_brands (
+CREATE TABLE IF NOT EXISTS marcas_vehiculos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    nombre TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    fecha_creacion TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS vehicle_models (
+CREATE TABLE IF NOT EXISTS modelos_vehiculos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    brand_id INTEGER NOT NULL REFERENCES vehicle_brands(id) ON DELETE RESTRICT,
-    name TEXT NOT NULL,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE (brand_id, name COLLATE NOCASE)
+    marca_id INTEGER NOT NULL REFERENCES marcas_vehiculos(id) ON DELETE RESTRICT,
+    nombre TEXT NOT NULL,
+    fecha_creacion TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE (marca_id, nombre COLLATE NOCASE)
 );
 
-CREATE TABLE IF NOT EXISTS engine_types (
+CREATE TABLE IF NOT EXISTS tipos_motor (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    code TEXT NOT NULL UNIQUE COLLATE NOCASE,
-    description TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    codigo TEXT NOT NULL UNIQUE COLLATE NOCASE,
+    descripcion TEXT,
+    fecha_creacion TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE IF NOT EXISTS part_applications (
+CREATE TABLE IF NOT EXISTS aplicaciones_repuestos (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    part_id INTEGER NOT NULL REFERENCES parts(id) ON DELETE CASCADE,
-    brand_id INTEGER NOT NULL REFERENCES vehicle_brands(id) ON DELETE RESTRICT,
-    model_id INTEGER NOT NULL REFERENCES vehicle_models(id) ON DELETE RESTRICT,
-    engine_type_id INTEGER REFERENCES engine_types(id) ON DELETE RESTRICT,
-    displacement REAL CHECK (displacement IS NULL OR displacement > 0),
-    year_from INTEGER CHECK (year_from IS NULL OR year_from BETWEEN 1886 AND 2200),
-    year_to INTEGER CHECK (year_to IS NULL OR year_to BETWEEN 1886 AND 2200),
-    application_text TEXT,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    CHECK (year_from IS NULL OR year_to IS NULL OR year_from <= year_to)
+    repuesto_id INTEGER NOT NULL REFERENCES repuestos(id) ON DELETE CASCADE,
+    marca_id INTEGER NOT NULL REFERENCES marcas_vehiculos(id) ON DELETE RESTRICT,
+    modelo_id INTEGER NOT NULL REFERENCES modelos_vehiculos(id) ON DELETE RESTRICT,
+    tipo_motor_id INTEGER REFERENCES tipos_motor(id) ON DELETE RESTRICT,
+    cilindrada REAL CHECK (cilindrada IS NULL OR cilindrada > 0),
+    anio_desde INTEGER CHECK (anio_desde IS NULL OR anio_desde BETWEEN 1886 AND 2200),
+    anio_hasta INTEGER CHECK (anio_hasta IS NULL OR anio_hasta BETWEEN 1886 AND 2200),
+    texto_aplicacion TEXT,
+    fecha_creacion TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CHECK (anio_desde IS NULL OR anio_hasta IS NULL OR anio_desde <= anio_hasta)
 );
-CREATE INDEX IF NOT EXISTS part_applications_vehicle_lookup ON part_applications (brand_id, model_id, year_from, year_to);
-CREATE UNIQUE INDEX IF NOT EXISTS part_applications_unique ON part_applications (
-    part_id, brand_id, model_id, coalesce(engine_type_id, 0), coalesce(displacement, 0),
-    coalesce(year_from, 0), coalesce(year_to, 0), upper(trim(coalesce(application_text, '')))
-);
-
-CREATE TABLE IF NOT EXISTS import_batches (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    file_name TEXT NOT NULL,
-    sheet_name TEXT,
-    status TEXT NOT NULL DEFAULT 'staged' CHECK (status IN ('staged', 'confirmed', 'rejected')),
-    total_rows INTEGER NOT NULL DEFAULT 0,
-    valid_rows INTEGER NOT NULL DEFAULT 0,
-    error_rows INTEGER NOT NULL DEFAULT 0,
-    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    processed_at TEXT
+CREATE INDEX IF NOT EXISTS aplicaciones_repuestos_busqueda_vehiculo ON aplicaciones_repuestos (marca_id, modelo_id, anio_desde, anio_hasta);
+CREATE UNIQUE INDEX IF NOT EXISTS aplicaciones_repuestos_unicas ON aplicaciones_repuestos (
+    repuesto_id, marca_id, modelo_id, coalesce(tipo_motor_id, 0), coalesce(cilindrada, 0),
+    coalesce(anio_desde, 0), coalesce(anio_hasta, 0), upper(trim(coalesce(texto_aplicacion, '')))
 );
 
-CREATE TABLE IF NOT EXISTS import_staging_rows (
+CREATE TABLE IF NOT EXISTS lotes_importacion (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    batch_id INTEGER NOT NULL REFERENCES import_batches(id) ON DELETE CASCADE,
-    row_number INTEGER NOT NULL,
-    raw_data TEXT NOT NULL,
-    normalized_data TEXT,
-    status TEXT NOT NULL CHECK (status IN ('valid', 'error')),
-    errors TEXT,
-    UNIQUE (batch_id, row_number)
+    nombre_archivo TEXT NOT NULL,
+    nombre_hoja TEXT,
+    estado TEXT NOT NULL DEFAULT 'staged' CHECK (estado IN ('staged', 'confirmed', 'rejected')),
+    total_filas INTEGER NOT NULL DEFAULT 0,
+    filas_validas INTEGER NOT NULL DEFAULT 0,
+    filas_error INTEGER NOT NULL DEFAULT 0,
+    fecha_creacion TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    fecha_procesamiento TEXT
+);
+
+CREATE TABLE IF NOT EXISTS filas_importacion (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    lote_id INTEGER NOT NULL REFERENCES lotes_importacion(id) ON DELETE CASCADE,
+    numero_fila INTEGER NOT NULL,
+    datos_originales TEXT NOT NULL,
+    datos_normalizados TEXT,
+    estado TEXT NOT NULL CHECK (estado IN ('valid', 'error')),
+    errores TEXT,
+    UNIQUE (lote_id, numero_fila)
 );

@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import sqlite3
 import os
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
+
+from migrations import migrate_management, migrate_spanish_names
 
 BASE_DIR = Path(__file__).resolve().parent
 DEFAULT_DB_PATH = Path(os.environ.get("CATALOGO_DB_PATH") or BASE_DIR / "data" / "catalogo.sqlite3")
@@ -33,7 +35,7 @@ def initialize_database(db_path: str | Path = DEFAULT_DB_PATH) -> None:
     descriptions_need_refresh = False
     # SQLite cannot remove NOT NULL from an existing column with ALTER TABLE.
     # Keep IDs intact so references from OEM, applications and staging remain valid.
-    with sqlite3.connect(path) as connection:
+    with closing(sqlite3.connect(path)) as connection:
         existing = connection.execute(
             "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'parts'"
         ).fetchone()
@@ -49,7 +51,7 @@ def initialize_database(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                     raise ValueError(f"Hay códigos de proveedor duplicados: {duplicate[0]}")
                 backup_path = path.with_name(path.stem + ".pre_supplier_migration" + path.suffix)
                 if not backup_path.exists():
-                    with sqlite3.connect(backup_path) as backup_connection:
+                    with closing(sqlite3.connect(backup_path)) as backup_connection:
                         connection.backup(backup_connection)
                 connection.execute("PRAGMA foreign_keys = OFF")
                 try:
@@ -87,7 +89,7 @@ def initialize_database(db_path: str | Path = DEFAULT_DB_PATH) -> None:
             if "application_text" not in columns:
                 backup_path = path.with_name(path.stem + ".pre_application_text_migration" + path.suffix)
                 if not backup_path.exists():
-                    with sqlite3.connect(backup_path) as backup_connection:
+                    with closing(sqlite3.connect(backup_path)) as backup_connection:
                         connection.backup(backup_connection)
                 connection.execute("PRAGMA foreign_keys = OFF")
                 try:
@@ -127,13 +129,18 @@ def initialize_database(db_path: str | Path = DEFAULT_DB_PATH) -> None:
                 if violation:
                     raise ValueError(f"La migración de aplicaciones dejó una referencia inválida: {violation}")
                 descriptions_need_refresh = True
+        migrate_spanish_names(connection, path)
+        migrate_management(connection, path)
     schema = SCHEMA_PATH.read_text(encoding="utf-8")
     with get_connection(path) as connection:
         connection.executescript(schema)
+        connection.executescript((BASE_DIR / "schema_gestion.sql").read_text(encoding="utf-8"))
+        for unit in ("Pieza", "Juego", "Metro"):
+            connection.execute("INSERT OR IGNORE INTO unidades_medida (nombre) VALUES (?)", (unit,))
         if descriptions_need_refresh:
             from descriptions import refresh_long_description
 
-            part_ids = [int(row[0]) for row in connection.execute("SELECT id FROM parts").fetchall()]
+            part_ids = [int(row[0]) for row in connection.execute("SELECT id FROM repuestos").fetchall()]
             for part_id in part_ids:
                 refresh_long_description(connection, part_id)
 
