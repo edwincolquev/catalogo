@@ -12,8 +12,42 @@ DEFAULT_DB_PATH = Path(os.environ.get("CATALOGO_DB_PATH") or BASE_DIR / "data" /
 SCHEMA_PATH = BASE_DIR / "schema.sql"
 
 
+def _postgres_url(db_path: str | Path) -> str | None:
+    if Path(db_path) != DEFAULT_DB_PATH:
+        return None
+    url = os.environ.get("DATABASE_URL")
+    if not url:
+        env_file = BASE_DIR / ".env"
+        if env_file.exists():
+            for line in env_file.read_text(encoding="utf-8-sig").splitlines():
+                if line.startswith("DATABASE_URL="):
+                    url = line.split("=", 1)[1].strip().strip('"').strip("'")
+                    break
+    if url and "[YOUR-PASSWORD]" in url:
+        raise ValueError("Sustituya [YOUR-PASSWORD] en DATABASE_URL")
+    return url or None
+
+
+def using_postgres() -> bool:
+    return bool(_postgres_url(DEFAULT_DB_PATH))
+
+
 @contextmanager
-def get_connection(db_path: str | Path = DEFAULT_DB_PATH):
+def get_connection(db_path: str | Path = DEFAULT_DB_PATH, *, autocommit: bool = False):
+    postgres_url = _postgres_url(db_path)
+    if postgres_url:
+        from postgres_database import PostgresConnection
+
+        connection = PostgresConnection(postgres_url, autocommit=autocommit)
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
@@ -30,6 +64,10 @@ def get_connection(db_path: str | Path = DEFAULT_DB_PATH):
 
 
 def initialize_database(db_path: str | Path = DEFAULT_DB_PATH) -> None:
+    if _postgres_url(db_path):
+        with get_connection(db_path, autocommit=True) as connection:
+            connection.execute("SELECT 1 FROM public.repuestos LIMIT 1")
+        return
     path = Path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptions_need_refresh = False
@@ -146,7 +184,7 @@ def initialize_database(db_path: str | Path = DEFAULT_DB_PATH) -> None:
 
 
 def fetch_all(query: str, parameters: tuple = (), db_path: str | Path = DEFAULT_DB_PATH) -> list[sqlite3.Row]:
-    with get_connection(db_path) as connection:
+    with get_connection(db_path, autocommit=True) as connection:
         return connection.execute(query, parameters).fetchall()
 
 

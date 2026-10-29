@@ -6,6 +6,7 @@ import io
 import re
 import sqlite3
 import unicodedata
+from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -17,8 +18,7 @@ from schema_names import IMPORT_KEY_RENAMES, normalize_import_data
 from gestion import guardar_repuesto, validar_gestion
 
 
-def plantilla_maestro_bytes() -> bytes:
-    columns = [
+MAESTRO_COLUMNS = [
         "repuestos.codigo_proveedor", "repuestos.codigo_sap", "repuestos.descripcion", "repuestos.medida",
         "unidades_medida.nombre", "marcas_repuestos.nombre", "categorias_repuestos.nombre",
         "repuestos.estado_gestion", "repuestos.minimo_compra", "repuestos.precio_compra",
@@ -27,11 +27,81 @@ def plantilla_maestro_bytes() -> bytes:
         "marcas_vehiculos.nombre", "modelos_vehiculos.nombre", "tipos_motor.codigo", "tipos_motor.descripcion",
         "aplicaciones_repuestos.cilindrada", "aplicaciones_repuestos.anio_desde",
         "aplicaciones_repuestos.anio_hasta", "aplicaciones_repuestos.texto_aplicacion",
-    ]
+]
+
+
+def plantilla_maestro_bytes(*, incluir_datos=False, marca_id=None, estado=None,
+                           db_path: str | Path = DEFAULT_DB_PATH) -> bytes:
+    """Exporta la plantilla vacía o los repuestos filtrados con sus relaciones."""
     output = io.StringIO(newline="")
     writer = csv.writer(output, delimiter=";")
-    writer.writerow([column.split(".")[0].upper() for column in columns])
-    writer.writerow(columns)
+    writer.writerow([column.split(".")[0].upper() for column in MAESTRO_COLUMNS])
+    writer.writerow(MAESTRO_COLUMNS)
+    if incluir_datos:
+        conditions, params = [], []
+        if marca_id == -1:
+            conditions.append("v.marca_id IS NULL")
+        elif marca_id is not None:
+            conditions.append("v.marca_id = ?")
+            params.append(marca_id)
+        if estado is not None:
+            conditions.append("v.estado_gestion = ?")
+            params.append(estado)
+        where = " WHERE " + " AND ".join(conditions) if conditions else ""
+        with get_connection(db_path) as connection:
+            parts = connection.execute(
+                "SELECT v.* FROM vista_repuestos v" + where + " ORDER BY v.id", params
+            ).fetchall()
+            if parts:
+                relations = []
+                queries = (
+                    """SELECT o.repuesto_id, o.codigo_oem FROM codigos_oem o
+                       JOIN vista_repuestos v ON v.id = o.repuesto_id""" + where +
+                    " ORDER BY o.repuesto_id, upper(o.codigo_oem)",
+                    """SELECT r.repuesto_id, r.tipo_referencia, r.codigo_referencia
+                       FROM referencias_cruzadas r JOIN vista_repuestos v ON v.id = r.repuesto_id""" + where +
+                    " ORDER BY r.repuesto_id, r.id",
+                    """SELECT a.repuesto_id, b.nombre AS marca_vehiculo, m.nombre AS modelo_vehiculo,
+                              e.codigo AS codigo_motor, e.descripcion AS descripcion_motor,
+                              a.cilindrada, a.anio_desde, a.anio_hasta, a.texto_aplicacion
+                       FROM aplicaciones_repuestos a
+                       JOIN vista_repuestos v ON v.id = a.repuesto_id
+                       JOIN marcas_vehiculos b ON b.id = a.marca_id
+                       JOIN modelos_vehiculos m ON m.id = a.modelo_id
+                       LEFT JOIN tipos_motor e ON e.id = a.tipo_motor_id""" + where +
+                    " ORDER BY a.repuesto_id, a.id",
+                )
+                for query in queries:
+                    grouped = defaultdict(list)
+                    for row in connection.execute(query, params):
+                        grouped[row["repuesto_id"]].append(row)
+                    relations.append(grouped)
+                oems, references, applications = relations
+                base_fields = (
+                    "codigo_proveedor", "codigo_sap", "descripcion", "medida", "unidad",
+                    "nombre_marca", "categoria", "estado_gestion", "minimo_compra",
+                    "precio_compra", "precio_venta", "cantidad_compra",
+                )
+                application_fields = (
+                    "marca_vehiculo", "modelo_vehiculo", "codigo_motor", "descripcion_motor",
+                    "cilindrada", "anio_desde", "anio_hasta", "texto_aplicacion",
+                )
+                for part in parts:
+                    part_id = part["id"]
+                    part_oems = oems[part_id]
+                    part_references = references[part_id]
+                    part_applications = applications[part_id]
+                    for index in range(max(1, len(part_oems), len(part_references), len(part_applications))):
+                        oem = part_oems[index]["codigo_oem"] if index < len(part_oems) else ""
+                        reference = part_references[index] if index < len(part_references) else None
+                        application = part_applications[index] if index < len(part_applications) else None
+                        writer.writerow(
+                            [part[field] for field in base_fields]
+                            + [oem,
+                               reference["tipo_referencia"] if reference else "",
+                               reference["codigo_referencia"] if reference else ""]
+                            + [application[field] if application else "" for field in application_fields]
+                        )
     return output.getvalue().encode("utf-8-sig")
 
 COLUMN_ALIASES = {
@@ -191,6 +261,9 @@ def stage_dataframe(dataframe: pd.DataFrame, nombre_archivo: str, nombre_hoja: s
         ))
         if master:
             supplied = data.get("codigo_proveedor", "")
+            if data.get("codigo_sap") and not supplied:
+                last_supplier = ""
+                last_brand = last_model = ""
             if supplied and _key(supplied) != _key(last_supplier):
                 last_brand = last_model = ""
             data["codigo_proveedor"] = supplied or last_supplier
@@ -208,8 +281,6 @@ def stage_dataframe(dataframe: pd.DataFrame, nombre_archivo: str, nombre_hoja: s
         errores = validar_gestion(data)
         if not data.get("codigo_proveedor") and not data.get("codigo_sap"):
             errores.append("Falta código de proveedor o SAP")
-        if master and not data.get("codigo_proveedor"):
-            errores.append("Falta código de proveedor")
         if data.get("codigo_referencia") and not data.get("tipo_referencia"):
             if master:
                 errores.append("La referencia necesita tipo_referencia")

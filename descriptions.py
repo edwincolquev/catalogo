@@ -95,9 +95,6 @@ def generate_long_description(connection: sqlite3.Connection, repuesto_id: int) 
     ).fetchall()
     if oems:
         values.append("(OEM: " + ", ".join(row["codigo_oem"].strip() for row in oems) + ")")
-    applications = generate_application_summary(connection, repuesto_id)
-    if applications:
-        values.append(applications)
     return "\n".join(values)
 
 

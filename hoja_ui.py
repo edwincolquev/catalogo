@@ -33,7 +33,8 @@ def _renovar_editor(state):
     state["entrada"] = deepcopy(state["borrador"])
 
 
-def _seleccionar_todas(selected):
+def _seleccionar_todas():
+    selected = st.session_state["hoja_seleccionar_todas"]
     state = st.session_state[STATE_KEY]
     for row in state["borrador"]:
         row["seleccionar"] = selected
@@ -51,7 +52,7 @@ def _al_editar(editor_key):
             for field, value in changes.items():
                 if field in (*CAMPOS_EDITABLES, "seleccionar"):
                     proposal[int(position)][field] = valor_celda(value)
-    draft, notices = aplicar_edicion(state["borrador"], proposal, st.session_state.get("hoja_repetir", False))
+    draft, notices = aplicar_edicion(state["borrador"], proposal, repetir=True)
     state["borrador"] = draft
     state["avisos"] = notices
     if draft != proposal:
@@ -77,14 +78,17 @@ def mostrar_hoja(rows, scope, total):
     st.caption(f"{len(state['borrador'])} de {total} repuestos mostrados con estos filtros.")
     if not state["borrador"]:
         st.info("No hay repuestos para los filtros elegidos.")
-        return
-    cols = st.columns([1, 1, 2])
-    cols[0].button("Seleccionar todas las mostradas", on_click=_seleccionar_todas, args=(True,))
-    cols[1].button("Quitar selección", on_click=_seleccionar_todas, args=(False,))
-    cols[2].toggle("Repetir edición en filas seleccionadas", key="hoja_repetir")
+        return []
     selected_count = sum(bool(row["seleccionar"]) for row in state["borrador"])
-    st.caption(f"{selected_count} filas seleccionadas. Con Repetir activado, edite una celda de una fila marcada para copiar su valor a las demás marcadas. Los códigos proveedor y SAP se editan individualmente.")
-
+    st.session_state["hoja_seleccionar_todas"] = selected_count == len(state["borrador"])
+    select_column, _ = st.columns([1, 11], gap="small")
+    select_column.checkbox(
+        "Seleccionar todas las filas mostradas",
+        key="hoja_seleccionar_todas",
+        label_visibility="collapsed",
+        help="Marcar o quitar la selección de todas las filas mostradas",
+        on_change=_seleccionar_todas,
+    )
     data = pd.DataFrame(state["entrada"])
     for field in NUMERICOS:
         data[field] = pd.to_numeric(data[field], errors="raise").astype(float)
@@ -96,7 +100,7 @@ def mostrar_hoja(rows, scope, total):
     data.index = data["id"].tolist()
     config = {field: st.column_config.TextColumn(label) for field, label in LABELS.items()}
     config["codigo_proveedor"] = st.column_config.TextColumn("Código proveedor", required=True)
-    config["seleccionar"] = st.column_config.CheckboxColumn("Seleccionar", default=False, pinned=True)
+    config["seleccionar"] = st.column_config.CheckboxColumn(" ", default=False, pinned=True, width="small")
     config["id"] = st.column_config.NumberColumn("ID", disabled=True)
     config["activo"] = st.column_config.CheckboxColumn("Activo")
     config["estado_gestion"] = st.column_config.SelectboxColumn("Estado", options=list(ESTADOS.values()), required=True, width="medium")
@@ -113,6 +117,7 @@ def mostrar_hoja(rows, scope, total):
     st.data_editor(data, hide_index=True, width="stretch", height=min(580, 38 + 35 * len(data)),
                    num_rows="fixed", column_config=config, disabled=disabled, key=state["editor_key"],
                    on_change=_al_editar, args=(state["editor_key"],))
+    st.caption(f"{selected_count} filas seleccionadas. Edite una celda de una fila marcada para copiar su valor a las demás marcadas. Los códigos proveedor y SAP se editan individualmente.")
     for notice in state["avisos"]:
         st.warning(notice)
     st.caption("Las categorías deben pertenecer a la marca de cada fila. Al cambiar la marca se limpia su categoría. Los artículos En SAP tienen cerrados sus precios, cantidades y estado.")
@@ -142,3 +147,4 @@ def mostrar_hoja(rows, scope, total):
     if discard.button("Descartar cambios de la hoja", disabled=not changes):
         st.session_state.pop(STATE_KEY)
         st.rerun()
+    return [row["id"] for row in state["borrador"] if row["seleccionar"]]

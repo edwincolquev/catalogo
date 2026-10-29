@@ -105,7 +105,7 @@ def guardar_repuesto(connection: sqlite3.Connection, data: dict, repuesto_id=Non
             values[field] = str(data[field]).strip() if data[field] is not None else None
             values[field] = values[field] or None
     if "activo" in data:
-        values["activo"] = int(data["activo"])
+        values["activo"] = bool(data["activo"])
     for field in NUMERICOS:
         if field in data:
             values[field] = numero_gestion(field, data[field])

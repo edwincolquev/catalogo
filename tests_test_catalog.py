@@ -1,9 +1,11 @@
 import csv
+import io
 import pandas as pd
 
 from database import get_connection, initialize_database
 from descriptions import format_application_rows, generate_application_summary, refresh_long_description
-from importer import confirm_batch, read_source, stage_dataframe
+from gestion import guardar_repuesto
+from importer import confirm_batch, plantilla_maestro_bytes, read_source, save_application, stage_dataframe
 
 
 def test_import_and_description_generation(tmp_path):
@@ -21,6 +23,60 @@ def test_import_and_description_generation(tmp_path):
         assert descripcion == "Filtro aceite\n10 mm\n(OEM: OEM-1, OEM-2)"
         assert connection.execute("SELECT COUNT(*) FROM filas_importacion WHERE estado = 'error'").fetchone()[0] == 0
         assert connection.execute("SELECT descripcion FROM repuestos WHERE codigo_sap = 'SAP-002'").fetchone()[0] is None
+
+
+def test_description_keeps_material_details_separate_from_applications(tmp_path):
+    path = tmp_path / "catalogo.sqlite3"
+    initialize_database(path)
+    with get_connection(path) as connection:
+        part_id, _ = guardar_repuesto(connection, dict(codigo_proveedor="P-1", descripcion="Filtro", medida="10 mm"))
+        connection.execute("INSERT INTO codigos_oem (repuesto_id, codigo_oem) VALUES (?, ?)", (part_id, "OEM-1"))
+        save_application(connection, part_id, dict(marca_vehiculo="TOYOTA", modelo_vehiculo="HILUX"))
+        description = refresh_long_description(connection, part_id)
+        applications = generate_application_summary(connection, part_id)
+        assert description == "Filtro\n10 mm\n(OEM: OEM-1)"
+        assert applications == "TOYOTA: HILUX"
+
+
+def test_filtered_master_export_includes_related_data_and_can_be_reimported(tmp_path):
+    path = tmp_path / "catalogo.sqlite3"
+    initialize_database(path)
+    with get_connection(path) as connection:
+        first, _ = guardar_repuesto(connection, dict(codigo_proveedor="P-1", descripcion="Filtro",
+                                                  nombre_marca="MARCA A", categoria="FRENOS",
+                                                  estado_gestion="propuesto", precio_compra=3))
+        guardar_repuesto(connection, dict(codigo_proveedor="P-2", codigo_sap="SAP-2",
+                                         nombre_marca="MARCA B", estado_gestion="en_sap"))
+        guardar_repuesto(connection, dict(codigo_sap="SAP-3", estado_gestion="en_sap"))
+        brand_id = connection.execute("SELECT id FROM marcas_repuestos WHERE nombre = 'MARCA A'").fetchone()[0]
+        for code in ("OEM-1", "OEM-2"):
+            connection.execute("INSERT INTO codigos_oem (repuesto_id, codigo_oem) VALUES (?, ?)", (first, code))
+        connection.execute("""INSERT INTO referencias_cruzadas
+            (repuesto_id, tipo_referencia, codigo_referencia) VALUES (?, 'CRUCE', 'REF-1')""", (first,))
+        for model in ("HILUX", "COROLLA"):
+            save_application(connection, first, dict(marca_vehiculo="TOYOTA", modelo_vehiculo=model))
+
+    empty = list(csv.reader(io.StringIO(plantilla_maestro_bytes().decode("utf-8-sig")), delimiter=";"))
+    assert len(empty) == 2
+    filtered = list(csv.reader(io.StringIO(plantilla_maestro_bytes(
+        incluir_datos=True, marca_id=brand_id, estado="propuesto", db_path=path
+    ).decode("utf-8-sig")), delimiter=";"))
+    assert len(filtered) == 4
+    assert [row[0] for row in filtered[2:]] == ["P-1", "P-1"]
+    assert [row[12] for row in filtered[2:]] == ["OEM-1", "OEM-2"]
+    assert [row[16] for row in filtered[2:]] == ["HILUX", "COROLLA"]
+    assert [row[13:15] for row in filtered[2:]] == [["CRUCE", "REF-1"], ["", ""]]
+
+    no_brand = list(csv.reader(io.StringIO(plantilla_maestro_bytes(
+        incluir_datos=True, marca_id=-1, estado="en_sap", db_path=path
+    ).decode("utf-8-sig")), delimiter=";"))
+    assert len(no_brand) == 3
+    assert no_brand[2][1] == "SAP-3"
+
+    source = tmp_path / "exportado.csv"
+    source.write_bytes(plantilla_maestro_bytes(incluir_datos=True, db_path=path))
+    batch = stage_dataframe(read_source(source), source.name, db_path=path)
+    assert confirm_batch(batch, db_path=path) == (0, 0)
 
 
 def test_import_reads_semicolon_csv(tmp_path):

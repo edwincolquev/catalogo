@@ -6,8 +6,8 @@ from pathlib import Path
 
 import streamlit as st
 
-from database import execute, fetch_all, get_connection, initialize_database
-from descriptions import generate_application_summary, refresh_long_description
+from database import execute, fetch_all, get_connection, initialize_database, using_postgres
+from descriptions import generate_application_summary, generate_long_description, refresh_long_description
 from importer import confirm_batch, plantilla_maestro_bytes, read_source, save_application, stage_dataframe
 from schema_names import normalize_import_data
 from gestion import CAMPOS_GESTION, ESTADOS, guardar_repuesto
@@ -18,7 +18,8 @@ from hoja_ui import hay_cambios_hoja, mostrar_hoja
 st.set_page_config(page_title="Catálogo de repuestos", page_icon="+", layout="wide")
 initialize_database()
 st.title("Catálogo de repuestos")
-st.caption("Repuestos, aplicaciones, importación y descripciones")
+st.caption("Repuestos, aplicaciones, importación y descripciones · Base: " +
+           ("Supabase" if using_postgres() else "SQLite local"))
 
 counts = fetch_all("""SELECT
     (SELECT COUNT(*) FROM repuestos) AS repuestos,
@@ -66,7 +67,7 @@ with catalog_tab:
         sql += " LIMIT ?"
         params += (row_limit,)
     repuestos = fetch_all(sql, params)
-    mostrar_hoja(repuestos, (brand_filter, state_filter, search, row_limit), total)
+    seleccionados = mostrar_hoja(repuestos, (brand_filter, state_filter, search, row_limit), total)
 
     with st.expander("Nuevo repuesto"):
         new_classification = campos_clasificacion("nuevo")
@@ -93,10 +94,14 @@ with catalog_tab:
                 except Exception as error:
                     st.error(f"No fue posible crear el repuesto: {error}")
 
-    if repuestos:
-        choices = {part["id"]: f"{part['codigo_proveedor'] or 'Sin proveedor'} · {part['codigo_sap'] or 'Sin SAP'} · {part['descripcion'] or ''}" for part in repuestos}
-        repuesto_id = st.selectbox("Seleccionar repuesto para administrar", list(choices), format_func=choices.get)
+    if repuestos and not seleccionados:
+        st.info("Seleccione una fila de la hoja de trabajo para administrar ese repuesto.")
+    elif len(seleccionados) > 1:
+        st.info("Hay varias filas seleccionadas. Deje solo una para administrar un repuesto.")
+    if len(seleccionados) == 1:
+        repuesto_id = seleccionados[0]
         part = fetch_all("SELECT * FROM vista_repuestos WHERE id = ?", (repuesto_id,))[0]
+        st.subheader(f"Administrar repuesto: {part['codigo_proveedor'] or part['codigo_sap'] or repuesto_id}")
         with st.form(f"edit_part_{repuesto_id}"):
             cols = st.columns(2)
             supplier_edit = cols[0].text_input("Código proveedor *", value=part["codigo_proveedor"] or "")
@@ -121,9 +126,10 @@ with catalog_tab:
                     st.error(f"No fue posible actualizar: {error}")
 
         mostrar_gestion(part)
-        with get_connection() as connection:
+        with get_connection(autocommit=True) as connection:
+            descripcion_generada = generate_long_description(connection, repuesto_id)
             application_summary = generate_application_summary(connection, repuesto_id)
-        st.text_area("Descripción generada", value=part["descripcion_larga"] or "", height=140, disabled=True)
+        st.text_area("Descripción generada", value=descripcion_generada, height=140, disabled=True)
         st.text_area("Aplicaciones en formato de catálogo", value=application_summary, height=90, disabled=True)
 
         left, right = st.columns(2)
@@ -301,8 +307,28 @@ with catalog_tab:
 
 with import_tab:
     st.subheader("Importar maestro CSV o Excel")
-    st.download_button("Descargar plantilla con clasificación y gestión", data=plantilla_maestro_bytes(),
-                       file_name="plantilla_maestro_gestion.csv", mime="text/csv")
+    export_cols = st.columns(2)
+    export_brand = export_cols[0].selectbox(
+        "Filtrar por MARCA", [None, -1, *brands],
+        format_func=lambda value: "Todas las marcas" if value is None else (
+            "Sin marca" if value == -1 else brands[value]
+        ), key="export_filtro_marca",
+    )
+    export_state = export_cols[1].selectbox(
+        "Filtrar por estado", [None, *ESTADOS],
+        format_func=lambda value: ESTADOS.get(value, "Todos"), key="export_filtro_estado",
+    )
+    download_cols = st.columns(2)
+    download_cols[0].download_button(
+        "Descargar plantilla con clasificación y gestión",
+        data=plantilla_maestro_bytes(incluir_datos=True, marca_id=export_brand, estado=export_state),
+        file_name="plantilla_maestro_filtrada.csv", mime="text/csv",
+    )
+    download_cols[1].download_button(
+        "Descargar plantilla vacía", data=plantilla_maestro_bytes(),
+        file_name="plantilla_maestro_gestion.csv", mime="text/csv",
+    )
+    st.caption("La plantilla con datos incluye únicamente los repuestos que coinciden con ambos filtros.")
     st.caption("Los precios de compra y venta de la plantilla están expresados en USD.")
     st.caption("Un código de proveedor repetido añade datos al mismo repuesto. Los campos informados del repuesto se actualizan; los OEM y las referencias nuevos se añaden sin duplicados.")
     source_file = st.file_uploader("Archivo maestro", type=["csv", "xlsx", "xls"])
